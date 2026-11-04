@@ -29,3 +29,8 @@ logs/
 *config.yaml*
 *profile*/
 *.secrets.*
+
+# Windows diagnostics and local bridge handoff records (never public)
+*.dpapi
+*.dmp
+handoff_*

@@ -1,4 +1,6 @@
 name: offline-tests
+permissions:
+  contents: read
 on:
   push:
   pull_request:
@@ -7,7 +9,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ['3.12']
+        python-version: ['3.12', '3.13']
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

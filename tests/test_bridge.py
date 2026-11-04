@@ -115,6 +115,129 @@ class BridgeOfflineTests(unittest.TestCase):
                 bridge.Handler.do_POST(obj)
                 self.assertEqual(obj.status[0], 400)
 
+    def test_invalid_nested_json_shape_rejected_with_http_400(self):
+        class GuardHandler:
+            def __init__(self, blob):
+                self.headers = {'Content-Length': str(len(blob))}
+                self.rfile = io.BytesIO(blob)
+                self.path = '/v1/chat/completions'
+                self.status = None
+            def _json(self, status, body):
+                self.status = (status, body)
+
+        good = {'messages': [{'role': 'user', 'content': 'hello'}]}
+        corrupt = [
+            {'tools': [{'function': 'bad'}]},
+            {'tools': [{'function': None}]},
+            {'messages': [{'role': 'assistant', 'tool_calls': 'bad'}]},
+            {'messages': [{'role': 'assistant', 'tool_calls': ['bad']}]},
+            {'messages': [{'role': 'assistant', 'tool_calls': [{'function': 'bad'}]}]},
+            {'messages': [{'role': 'assistant', 'tool_calls': None}]},
+            {'options': 'bad'},
+            {'options': ['bad']},
+            {'tools': [False]},
+        ]
+        for patch in corrupt:
+            with self.subTest(patch=patch):
+                payload = {**good, **patch}
+                blob = json.dumps(payload).encode('utf-8')
+                obj = GuardHandler(blob)
+                with mock.patch.object(bridge.urllib.request, 'urlopen',
+                                       side_effect=AssertionError('upstream must not be called')):
+                    bridge.Handler.do_POST(obj)
+                self.assertEqual(obj.status[0], 400)
+                self.assertEqual(obj.status[1]['error']['code'], 'invalid_request_shape')
+        self.assertTrue(bridge.valid_request_shape(good))
+        self.assertTrue(bridge.valid_request_shape({**good, 'tools': [{'function': {'name': 'read_file'}}],
+                                                    'options': {'num_ctx': 10000}}))
+
+    def test_context_limit_cannot_be_overridden(self):
+        payload = {'model': 'test', 'messages': [{'role': 'user', 'content': 'hi'}],
+                   'options': {'num_ctx': 999999, 'temperature': 0.2}}
+        native = bridge.to_ollama_chat(payload, payload['messages'])
+        self.assertEqual(native['options']['num_ctx'], bridge.NUM_CTX)
+        self.assertEqual(native['options']['temperature'], 0.2)
+
+        # In observe + non-native mode the normal passthrough must ALSO
+        # override the client's options, not merely set a default.
+        class LocalOllamaStub(BaseHTTPRequestHandler):
+            seen = []
+            def log_message(self, *args):
+                return
+            def do_POST(self):
+                raw = self.rfile.read(int(self.headers['Content-Length']))
+                type(self).seen.append(json.loads(raw))
+                data = json.dumps({'choices': [{'message': {'role': 'assistant', 'content': 'ok'}}]}).encode()
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+        LocalOllamaStub.seen.clear()
+        with ThreadingHTTPServer(('127.0.0.1', 0), LocalOllamaStub) as upstream, \
+             ThreadingHTTPServer(('127.0.0.1', 0), bridge.Handler) as frontend, \
+             tempfile.TemporaryDirectory() as directory:
+            t1 = threading.Thread(target=upstream.serve_forever, daemon=True)
+            t2 = threading.Thread(target=frontend.serve_forever, daemon=True)
+            t1.start(); t2.start()
+            try:
+                with mock.patch.multiple(bridge, UPSTREAM=f'http://127.0.0.1:{upstream.server_port}',
+                                         NATIVE=False, TOOL_POLICY_MODE='observe', LOG_DIR=Path(directory)):
+                    body = json.dumps({**payload, 'max_tokens': 64}).encode()
+                    req = urllib.request.Request(f'http://127.0.0.1:{frontend.server_port}/v1/chat/completions',
+                                                 data=body, method='POST',
+                                                 headers={'Content-Type': 'application/json'})
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        self.assertEqual(response.status, 200)
+                self.assertEqual(LocalOllamaStub.seen[0]['options']['num_ctx'], bridge.NUM_CTX)
+            finally:
+                upstream.shutdown(); frontend.shutdown()
+                t1.join(timeout=3); t2.join(timeout=3)
+
+    def test_non_compressible_margin_is_counted_once(self):
+        limit = bridge.NUM_CTX
+        self.assertFalse(bridge.non_compressible_exceeds_context({'total': limit}))
+        self.assertTrue(bridge.non_compressible_exceeds_context({'total': limit + 1}))
+        self.assertFalse(bridge.non_compressible_exceeds_context(
+            {'total': limit - bridge.TOTAL_MARGIN_TOKENS}))
+
+    def test_message_tokens_include_reasoning_and_legacy_function_call(self):
+        base = {'role': 'assistant', 'content': 'ok'}
+        long = {**base, 'reasoning_content': 'R' * 9000,
+                'function_call': {'name': 'work', 'arguments': 'x' * 3000}}
+        self.assertGreater(bridge.message_tokens(long), bridge.message_tokens(base) + 2000)
+        self.assertGreater(bridge.conversation_tokens([long]), bridge.conversation_tokens([base]))
+
+    def test_condense_keeps_notice_and_last_user_with_orphan_system_entries(self):
+        # sanitize removes empty assistant messages; fixed len(systems)+1 indices
+        # could shift and wrongly delete the notice in earlier implementations.
+        messages = [{'role': 'system', 'content': 'must keep A'},
+                    {'role': 'system', 'content': 'must keep B'},
+                    {'role': 'assistant', 'content': ' '},
+                    *[{'role': 'assistant', 'content': 'middle-' + str(i) + 'x' * 1500}
+                      for i in range(6)],
+                    {'role': 'user', 'content': 'last user invariant'}]
+        with mock.patch.object(bridge, 'KEEP_RECENT', 6):
+            out, report = bridge.condense(messages, budget_tokens=8)
+        self.assertTrue(report['condensed'])
+        self.assertIn('must keep A', [m.get('content') for m in out])
+        self.assertIn('must keep B', [m.get('content') for m in out])
+        self.assertTrue(any(bridge.MARKER in m.get('content', '') for m in out))
+        self.assertTrue(any(m.get('content') == 'last user invariant' for m in out))
+
+    def test_repeated_blocked_call_is_stopped_without_upstream(self):
+        payload = {'model': 'local-test', 'max_tokens': 64,
+                   'messages': [{'role': 'system', 'content': 'sys'},
+                                {'role': 'user', 'content': 'run tool'},
+                                {'role': 'assistant', 'content':
+                                 bridge.BLOCK_MARKER_PREFIX + ' tool blocked'}],
+                   'tools': []}
+        fp = bridge.request_fingerprint(payload, session_hint='s1')
+        with mock.patch.dict(bridge._BLOCK_SEEN, {}, clear=True):
+            bridge.note_blocked(fp)
+            bridge.note_blocked(fp)
+            self.assertTrue(bridge.blocked_recently(fp))
+            self.assertTrue(bridge.history_has_block_marker(payload['messages']))
+
     def test_no_tools_by_default(self):
         self.assertEqual(bridge.ALLOWED_TOOLS, frozenset())
         schema = {'type': 'function', 'function': {'name': 'read_file', 'parameters': {}}}
@@ -241,6 +364,7 @@ class BridgeOfflineTests(unittest.TestCase):
                         self.assertEqual(body['choices'][0]['message']['content'], 'pong')
                         self.assertFalse(seen[0].get('tools'))
                         self.assertEqual(seen[0]['options']['num_predict'], 64)
+                        self.assertEqual(seen[0]['options']['num_ctx'], bridge.NUM_CTX)
             finally:
                 upstream.shutdown()
                 frontend.shutdown()

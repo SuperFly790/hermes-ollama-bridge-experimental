@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-rc.2 — Gemini audit follow-up (2026-11-04)
+
+- Reject malformed nested `tool_calls`, `tools.function` and `options` input with HTTP 400.
+- Enforce bridge-side `num_ctx` even in unsafe observe/non-native compatibility mode.
+- Fix the double-counted context safety margin on non-compressible history.
+- Preserve handoff system notice and last user turn during emergency trimming.
+- Include reasoning and legacy `function_call` fields in first-pass token estimates.
+- Limit GitHub Actions token permissions and test Python 3.12/3.13 on Windows and Ubuntu.
+- Ignore `.dpapi`, `.dmp`, and `handoff_*` diagnostics; add regression tests.
+- Still experimental: no production automatic fallback, no new live Ollama / Hermes validation.
+
+
 ## 0.1.0-rc.1 — public review candidate (2026-11-04)
 
 - Extracted a standalone bridge from a private v5 sandbox, without production configuration or raw logs.

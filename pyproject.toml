@@ -1,6 +1,6 @@
 [project]
 name = "hermes-ollama-bridge-experimental"
-version = "0.1.0rc1"
+version = "0.1.0rc2"
 description = "Experimental Windows-only loopback Ollama bridge for OpenAI-compatible agents"
 requires-python = ">=3.12"
 license = {file = "LICENSE"}

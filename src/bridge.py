@@ -101,6 +101,37 @@ def estimate_tools_tokens(tools: list[dict[str, Any]]) -> int:
     return int(len(blob) / TOOLS_CHARS_PER_TOKEN) + 1 + MSG_OVERHEAD_TOKENS * len(tools)
 
 
+def valid_request_shape(payload: Any) -> bool:
+    """Fail with HTTP 400 for malformed nested fields before using them.
+
+    OpenAI-compatible callers may omit optional tools/options fields; when
+    present, they must be containers that downstream policy and adapters expect.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("messages"), list):
+        return False
+    for message in payload["messages"]:
+        if not isinstance(message, dict):
+            return False
+        calls = message.get("tool_calls", [])
+        if not isinstance(calls, list):
+            return False
+        if any(not isinstance(call, dict) or not isinstance(call.get("function", {}), dict)
+               for call in calls):
+            return False
+    tools = payload.get("tools", [])
+    if not isinstance(tools, list):
+        return False
+    if any(not isinstance(tool, dict) or not isinstance(tool.get("function", {}), dict)
+           for tool in tools):
+        return False
+    return isinstance(payload.get("options", {}), dict)
+
+
+def non_compressible_exceeds_context(noncomp: dict[str, int]) -> bool:
+    """The reported total ALREADY includes TOTAL_MARGIN_TOKENS."""
+    return noncomp["total"] > NUM_CTX
+
+
 def filter_tools(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     """Оставляет в запросе к Qwen только имена из ALLOWED_TOOLS."""
     if TOOL_POLICY_MODE != "enforce" or not tools:
@@ -730,6 +761,13 @@ def message_tokens(msg: dict[str, Any]) -> int:
     total = estimate_tokens(_content_text(msg.get("content")))
     for tc in msg.get("tool_calls") or []:
         total += estimate_tokens(json.dumps(tc, ensure_ascii=False))
+    # Account for every field that the conservative estimator also sees;
+    # otherwise long reasoning/function-call payloads evade the first budget pass.
+    for field in ("role", "name", "tool_call_id", "reasoning_content", "function_call"):
+        value = msg.get(field)
+        if value is not None:
+            total += estimate_tokens(value if isinstance(value, str) else
+                                     json.dumps(value, ensure_ascii=False))
     return total
 
 
@@ -1015,11 +1053,17 @@ def condense(messages: list[dict[str, Any]], budget_tokens: int) -> tuple[list[d
         tail = [_shrink_message(m, lim) for m in tail]
         out = sanitize(systems + [notice] + tail)
 
-    # Страховка: если всё равно не влезает — режем summary, затем самые старые из хвоста
-    while conversation_tokens(out) > budget_tokens and len(out) > (len(systems) + 2):
-        idx = len(systems) + 1 if len(out) > len(systems) + 2 else None
+    # Preserve ALL system messages, the handoff notice and the last user turn.
+    # sanitize() can delete messages before the notice, so a fixed index derived
+    # from len(systems) is unsafe. Never drop a control message to meet a budget.
+    while conversation_tokens(out) > budget_tokens:
+        protected_user_idx = next((i for i in range(len(out) - 1, -1, -1)
+                                   if out[i].get("role") == "user"), None)
+        protected_last_idx = len(out) - 1 if protected_user_idx is None else protected_user_idx
+        idx = next((i for i, m in enumerate(out)
+                    if m.get("role") != "system" and i != protected_last_idx), None)
         if idx is None:
-            break
+            break  # Caller must reject an unsatisfiable context budget.
         out.pop(idx)
         report["dropped_messages"] += 1
 
@@ -1265,11 +1309,7 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             self._json(400, {"error": {"message": "invalid json"}})
             return
-        if (not isinstance(payload, dict)
-                or not isinstance(payload.get("messages"), list)
-                or any(not isinstance(m, dict) for m in payload["messages"])
-                or not isinstance(payload.get("tools", []), list)
-                or any(not isinstance(t, dict) for t in payload.get("tools", []))):
+        if not valid_request_shape(payload):
             self._json(400, {"error": {"code": "invalid_request_shape"}})
             return
         fp = request_fingerprint(
@@ -1308,7 +1348,7 @@ class Handler(BaseHTTPRequestHandler):
         # резерв генерации) проверяется ДО проходов condense: если она не влезает,
         # сжатие истории задачу всё равно не спасёт.
         noncomp = non_compressible_tokens(payload["messages"], plan["tools_tokens"], plan["gen_reserve"])
-        if noncomp["total"] > NUM_CTX - TOTAL_MARGIN_TOKENS:
+        if non_compressible_exceeds_context(noncomp):
             event = log_event("context_not_compressible", {**noncomp, **plan["log"]})
             self._json(400, {"error": {"code": "context_not_compressible",
                                        "message": "system, схемы инструментов и последний ввод не помещаются "
@@ -1371,7 +1411,9 @@ class Handler(BaseHTTPRequestHandler):
         body = dict(payload)
         body["messages"] = out_messages
         opts = dict(body.get("options") or {})
-        opts.setdefault("num_ctx", NUM_CTX)
+        # A caller cannot override the bridge's tested context budget, even
+        # when observe mode uses a non-native OpenAI-compatible passthrough.
+        opts["num_ctx"] = NUM_CTX
         if "options" in body or self.path.rstrip("/") == "/api/chat":
             body["options"] = opts
         try:

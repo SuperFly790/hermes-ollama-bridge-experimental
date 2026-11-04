@@ -54,7 +54,7 @@ See [Known limitations](docs/KNOWN_LIMITATIONS.md), [Architecture](docs/ARCHITEC
 py -3.12 -m unittest discover -s tests -v
 ```
 
-There are 19 standalone offline unit tests covering safety defaults, oversized inputs, bounded summaries, context budgeting, SSE completion and truncation, forbidden tool calls, and concurrent JSONL logging. These tests use a **mock upstream** and **do not establish** compatibility with Hermes Gateway or real Qwen. GitHub Actions runs the same suite on Linux and Windows.
+The offline unit test suite covers safety defaults, oversized inputs, bounded summaries, context budgeting, SSE completion and truncation, forbidden tool calls, and concurrent JSONL logging. These tests use a **mock upstream** and **do not establish** compatibility with Hermes Gateway or real Qwen. GitHub Actions runs the suite on Ubuntu and Windows with Python 3.12 and 3.13.
 
 ## Observed research results (not a benchmark of this revision)
 

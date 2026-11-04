@@ -31,3 +31,7 @@ The user explicitly disabled live automatic fallback on the MSI: `fallback_provi
 ## Outcome requested from Gemini
 
 Produce prioritized P0/P1/P2 findings with exact file:line references, independent evaluation of the Grok bot build provenance and source licensing, precise code fixes (not just abstractions), publish / no-publish decision, and a minimal reproducible offline test plan. Do not reinterpret past canary as definitive evidence of model inability. All missing evidence must be named.
+
+## Post-review note (2026-11-04)
+
+The original checklist above documents rc.1, not the follow-up revision. In rc.2, offline regression tests cover the Gemini P1/P2 fixes; GitHub Actions now uses a read-only token and tests Python 3.12 and 3.13 on both Windows and Ubuntu. A successful CI run remains to be verified after commit. This is not a live Ollama or Hermes Gateway certification.
