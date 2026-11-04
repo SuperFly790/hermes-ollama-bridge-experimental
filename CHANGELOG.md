@@ -1,5 +1,12 @@
 # Changelog
 
+## On-device validation documentation update (2026-11-04)
+
+- Document subsequently reported rc.2 Windows MSI Ollama/Qwen integration tests without publishing private logs or local configuration.
+- Clarify that Hermes v0.22.5 has a configurable, finite auto-recovery ladder, and that synthetic-upstream `2/0` tests do not constitute a bridge code change.
+- Record 196.6-second history compression, SSE diagnostic caveats, Stage 2 compression setup failures, and untested side-effect idempotency.
+- Documentation only; no new binary release or promotion to production.
+
 ## 0.1.0-rc.2 — Gemini audit follow-up (2026-11-04)
 
 - Reject malformed nested `tool_calls`, `tools.function` and `options` input with HTTP 400.
@@ -9,7 +16,7 @@
 - Include reasoning and legacy `function_call` fields in first-pass token estimates.
 - Limit GitHub Actions token permissions and test Python 3.12/3.13 on Windows and Ubuntu.
 - Ignore `.dpapi`, `.dmp`, and `handoff_*` diagnostics; add regression tests.
-- Still experimental: no production automatic fallback, no new live Ollama / Hermes validation.
+- At the time of this code commit, the rc.2 source had not yet been live-tested. Later operator-reported MSI tests are recorded in the public README; production automatic fallback remains disabled.
 
 
 ## 0.1.0-rc.1 — public review candidate (2026-11-04)
