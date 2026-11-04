@@ -11,7 +11,7 @@ A small local HTTP gateway translates OpenAI-style `POST /v1/chat/completions` r
 - `BRIDGE_TOOL_POLICY=enforce` by default. Never use `observe` with an untrusted agent.
 - Limits JSON request bodies to 8 MiB by default. Full history spill files are **off** by default; upstream HTTP errors do not dump prompts. Diagnostic JSONL files can still contain metadata; keep them private.
 - Does not support automatic safe replay of non-idempotent actions. An old agent may still retry independently.
-- Streaming errors use a custom SSE error frame; **client compatibility is not established**.
+- Streaming errors use a custom SSE error frame. Hermes v0.22.5 CLI has been tested against interrupted streams in an isolated environment; error attribution and end-of-turn behavior still have caveats. This is not a general OpenAI-client compatibility guarantee.
 
 ## Quick start (Windows, *separate test environment*)
 
@@ -54,11 +54,23 @@ See [Known limitations](docs/KNOWN_LIMITATIONS.md), [Architecture](docs/ARCHITEC
 py -3.12 -m unittest discover -s tests -v
 ```
 
-The offline unit test suite covers safety defaults, oversized inputs, bounded summaries, context budgeting, SSE completion and truncation, forbidden tool calls, and concurrent JSONL logging. These tests use a **mock upstream** and **do not establish** compatibility with Hermes Gateway or real Qwen. GitHub Actions runs the suite on Ubuntu and Windows with Python 3.12 and 3.13.
+The offline unit test suite covers safety defaults, oversized inputs, bounded summaries, context budgeting, SSE completion and truncation, forbidden tool calls, and concurrent JSONL logging. The offline unit tests use a **mock upstream** and cannot, by themselves, establish compatibility with Hermes Gateway or real Qwen. GitHub Actions successfully ran the rc.2 checks on Ubuntu and Windows with Python 3.12 and 3.13 (run [41825132154](https://github.com/SuperFly790/hermes-ollama-bridge-experimental/actions/runs/41825132154)). The operator also reported separate live MSI testing, summarized below.
 
-## Observed research results (not a benchmark of this revision)
+## Subsequent on-device validation of rc.2 (operator-reported, 2026-11-04)
 
-Previous sandbox v5 was exercised on a compact AMD UMA computer with local 9B Qwen. The recorded single-probe run reported `prompt_eval_count=482`, `context_length=65536`, and `14.24 s` cold start. A long synthetic JSON input reported 15,851 prompt tokens and 91.55 seconds. A synthetic canary experiment failed to reproduce middle-history identifiers and one tail identifier. Later independent analysis identified **prompt-construction confounders**; a clean A/B test has not been run. No live Ollama test has been performed on the *public candidate* in this repository.
+The Windows MSI test operator reported the following **isolated** results with the public rc.2 source at commit `b865567348f4f99cd81b6ab481f9f9be8e2fcb0e`:
+
+- Real Ollama/Qwen 3.5:9B HTTP probe: 8/8 checks passed; separate synthetic-stress probe: 9/9 passed. No tools were allowed.
+- Hermes v0.22.5 CLI via the bridge with `num_ctx=65536`: 30/30 dialog turns completed; three test identifiers were recalled after lossy history condensation. One real-model condensation took **196.6 seconds**; accuracy beyond those canaries is not established.
+- With a synthetic failing upstream, the Hermes configuration `agent.api_max_retries=2` and `agent.auto_recovery_cycles=0` terminated refused-connection attempts itself and recovered after two HTTP 503 responses. This is a Hermes-side setting, **not** a bridge fix or proof of a universal deadline.
+- SSE client abort, upstream interruption, and same-session resume were exercised in an isolated test profile, with caveats: an upstream interruption produced a misleading context-reset diagnostic; an interrupted user turn remained without a completed assistant response.
+- A further compression experiment was **inconclusive (setup failure, no new measurements)** due to Windows file locks / session title collisions. Safe replay or exactly-once execution of state-changing tools remains **untested**.
+
+These observations are based on reports from the MSI operator; the raw host logs and profile database remain private and are **not present in this repository**. They are not an independent replication, an audited production failover benchmark, or authorization to enable fallback.
+
+## Observed research results (historical sandbox, not a benchmark of this revision)
+
+Previous sandbox v5 was exercised on a compact AMD UMA computer with local 9B Qwen. The recorded single-probe run reported `prompt_eval_count=482`, `context_length=65536`, and `14.24 s` cold start. A long synthetic JSON input reported 15,851 prompt tokens and 91.55 seconds. A synthetic canary experiment failed to reproduce middle-history identifiers and one tail identifier. Later independent analysis identified **prompt-construction confounders**; a clean A/B test has not been run. Those historical sandbox observations precede the rc.2 on-device tests summarized above.
 
 These numbers are **historical observations reported by the test agent**, not independently reproduced source artifacts and not a quality guarantee.
 
