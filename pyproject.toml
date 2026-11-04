@@ -1,0 +1,13 @@
+[project]
+name = "hermes-ollama-bridge-experimental"
+version = "0.1.0rc1"
+description = "Experimental Windows-only loopback Ollama bridge for OpenAI-compatible agents"
+requires-python = ">=3.12"
+license = {file = "LICENSE"}
+readme = "README.md"
+authors = [{name="hermes-ollama-bridge contributors"}]
+classifiers = ["Development Status :: 3 - Alpha", "Operating System :: Microsoft :: Windows", "Programming Language :: Python :: 3"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
