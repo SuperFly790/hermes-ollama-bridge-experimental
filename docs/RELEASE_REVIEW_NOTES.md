@@ -35,3 +35,7 @@ Produce prioritized P0/P1/P2 findings with exact file:line references, independe
 ## Post-review note (2026-11-04)
 
 The original checklist above documents rc.1, not the follow-up revision. In rc.2, offline regression tests cover the Gemini P1/P2 fixes; GitHub Actions now uses a read-only token and tests Python 3.12 and 3.13 on both Windows and Ubuntu. A successful CI run remains to be verified after commit. This is not a live Ollama or Hermes Gateway certification.
+
+## Post-validation note (2026-11-04, operator-reported)
+
+The rc.2 GitHub Actions offline test matrix completed successfully: [run 41825132154](https://github.com/SuperFly790/hermes-ollama-bridge-experimental/actions/runs/41825132154). Subsequent isolated Windows MSI tests reportedly exercised public rc.2 with actual Ollama/Qwen 3.5:9B and Hermes v0.22.5 CLI. Outcomes include successful dialog, SSE abort/recovery experiments and limited marker recall across lossy compression; a tested long-history condensation took 196.6 seconds. Another longer-history setup failed before obtaining any new compression measurements. No real host tools were permitted. Side-effect idempotency, production Gateway fallback, and extended stability are **not certified**. Operator raw evidence and private paths are deliberately excluded. The release-review status remains open, particularly for licensing/provenance and stateful error-handling review.
